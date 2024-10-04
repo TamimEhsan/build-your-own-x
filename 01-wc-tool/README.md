@@ -16,14 +16,14 @@ This challenge is to build own version of the Unix command line tool wc! It shou
 > ccwc test.txt
   7145 58164 342190 test.txt
 >cat test.txt | ccwc -l
- 7145
+  7145
 ```
 
 ## Solution 
 
 ### Handling flags 
-To handle flags I used the handly library `flag` of golang.
+To handle flags the handly library `flag` of golang is used.
 
 ### Handling the counts
-To count the varieties of queries, I looped over the bytes and increamented the counts depending on whitespaces. The corner case is consecutive whitespaces.
+To count the varieties of queries, loop over the bytes and increament the counts depending on whitespaces. The corner case is consecutive whitespaces. But this creates problem to handle multibyte character. Using `rune` data type of golang makes it easier to handle this.
 
