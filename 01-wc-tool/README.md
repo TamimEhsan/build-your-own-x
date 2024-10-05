@@ -19,6 +19,18 @@ This challenge is to build own version of the Unix command line tool wc! It shou
   7145
 ```
 
+## Run locally
+Download the test file based on The Art of War from [here](https://www.dropbox.com/scl/fi/d4zs6aoq6hr3oew2b6a9v/test.txt?rlkey=20c9d257pxd5emjjzd1gcbn03&e=1&dl=0).
+
+Make sure you have go installed in your system. To use a file as source, run
+```
+go run . [-c] [-m] [-w] [-l] <input-file>
+```
+To use stdin as source, run
+```
+cat <input-file> | go run . [-c] [-m] [-w] [-l]
+```
+
 ## Solution 
 
 ### Handling flags 
