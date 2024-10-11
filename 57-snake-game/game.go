@@ -20,9 +20,9 @@ type game struct {
 	score  int
 }
 
-func (g *game) init() {
-	g.height = 12
-	g.width = 24
+func (g *game) init(height, width int) {
+	g.height = height
+	g.width = width
 	g.board = make([][]string, g.height+2)
 	for i := range g.board {
 		g.board[i] = make([]string, g.width+2)
@@ -80,7 +80,15 @@ func (g *game) moveSnake() {
 
 }
 
-func (g *game) checkGameOverCondition() bool {
+func (g *game) setDirection(dir string) {
+	prevDir := g.curDir
+	g.curDir = g.dir[dir]
+	if g.findNextHead() == g.snake[1] {
+		g.curDir = prevDir
+	}
+}
+
+func (g *game) isGameOver() bool {
 	for i := 1; i < len(g.snake); i++ {
 		if g.snake[0] == g.snake[i] {
 			return true
@@ -93,7 +101,7 @@ func (g *game) checkGameOverCondition() bool {
 	return false
 }
 
-func (g *game) gameOver() {
+func (g *game) end() {
 	fmt.Println()
 	fmt.Println("Game Over!")
 	os.Exit(0)

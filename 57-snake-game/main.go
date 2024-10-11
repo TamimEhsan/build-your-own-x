@@ -15,9 +15,9 @@ type Buffer struct {
 }
 
 // Reader goroutine: consumes data every 1 second
-func run(buffer *Buffer) {
+func runLoop(buffer *Buffer) {
 	game := game{}
-	game.init()
+	game.init(12, 24)
 
 	for {
 		// Lock the buffer and check if there is data to consume
@@ -27,16 +27,12 @@ func run(buffer *Buffer) {
 		buffer.data = ""
 		buffer.mutex.Unlock()
 		if dir != "" {
-			prevDir := game.curDir
-			game.curDir = game.dir[dir]
-			if game.findNextHead() == game.snake[1] {
-				game.curDir = prevDir
-			}
+			game.setDirection(dir)
 		}
 		game.clearBoard()
 		game.moveSnake()
-		if game.checkGameOverCondition() {
-			game.gameOver()
+		if game.isGameOver() {
+			game.end()
 		}
 		game.renderBoard()
 		game.clearScreen()
@@ -85,9 +81,7 @@ func main() {
 	// Start reader and writer goroutines
 
 	go inputReader(buffer)
-	run(buffer)
-
-	// Keep the main function running
+	runLoop(buffer)
 
 }
 
