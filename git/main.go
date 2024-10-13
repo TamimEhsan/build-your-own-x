@@ -31,7 +31,7 @@ func main() {
 		initCmd.Parse(os.Args[2:])
 		directory := initCmd.Arg(0)
 		git_init(directory)
-	case "hash_object":
+	case "hash-object":
 		hashObjectCmd.Parse(os.Args[2:])
 		file := hashObjectCmd.Arg(0)
 		git_hash_object(file, *objectType)
@@ -76,16 +76,20 @@ func git_init(directory string) {
 
 func git_hash_object(filename string, objectType string) {
 
+	if filename == "" || filename == "-" {
+		hash := hash_object(os.Stdin, objectType)
+		fmt.Println(hash)
+		return
+	}
+
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatalf("Failed to open file %s: %v", file, err)
-		os.Exit(1)
+		log.Fatalf("Failed to open file %s: %v", filename, err)
 	}
 	defer file.Close()
 
 	hash := hash_object(file, objectType)
 	fmt.Println(hash)
-
 }
 
 func git_add(files []string) {
@@ -106,25 +110,26 @@ func git_add(files []string) {
  * hash_object is a function that takes a file and an object type and
  * returns the sha1 hash of the object in form "<type> <size>\x00\<content>""
  */
-func hash_object(file *os.File, objectType string) string {
+func hash_object(reader io.Reader, objectType string) string {
 
-	fileStat, err := file.Stat()
+	tmpFile, err := os.CreateTemp("", "buffered-content-")
 	if err != nil {
-		log.Fatalf("Failed to get file stats: %v", err)
+		log.Fatalf("failed to create temporary file: %v", err)
 	}
+	defer os.Remove(tmpFile.Name()) // Ensure the temp file is removed
 
-	header := fmt.Sprintf("%s %d\x00", objectType, fileStat.Size())
-
-	fileContent := make([]byte, fileStat.Size())
-	if _, err := io.ReadFull(file, fileContent); err != nil {
-		log.Fatalf("Failed to read file content: %v", err)
+	size, err := io.Copy(tmpFile, reader)
+	if err != nil {
+		log.Fatalf("failed to read temporary file: %v", err)
 	}
+	tmpFile.Seek(0, 0)
 
-	data := append([]byte(header), fileContent...)
-
+	header := fmt.Sprintf("%s %d\x00", objectType, size)
 	hasher := sha1.New()
-	if _, err := hasher.Write(data); err != nil {
-		log.Fatalf("Failed to write data to hasher: %v", err)
+	hasher.Write([]byte(header))
+
+	if _, err := io.Copy(hasher, tmpFile); err != nil {
+		log.Fatalf("Failed to read file content: %v", err)
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil))
