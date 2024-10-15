@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/zlib"
 	"crypto/sha1"
 	"encoding/hex"
 	"flag"
@@ -62,14 +63,14 @@ func git_init(directory string) {
 		panic(err)
 	}
 	// create a .git directory
-	createDir(path.Join(directory, "git"))
+	createDir(path.Join(directory, ".git"))
 	// create subdirectories
 	for _, dir := range []string{"branches", "hooks", "info", "logs", "objects", "refs"} {
-		createDir(path.Join(directory, "git", dir))
+		createDir(path.Join(directory, ".git", dir))
 	}
 	// create files
 	for _, file := range []string{"HEAD", "config", "description", "index", "packed-refs"} {
-		createFile(path.Join(directory, "git", file))
+		createFile(path.Join(directory, ".git", file))
 	}
 
 }
@@ -77,7 +78,7 @@ func git_init(directory string) {
 func git_hash_object(filename string, objectType string) {
 
 	if filename == "" || filename == "-" {
-		hash := hash_object(os.Stdin, objectType)
+		hash := hash_object(os.Stdin, objectType, false)
 		fmt.Println(hash)
 		return
 	}
@@ -88,7 +89,7 @@ func git_hash_object(filename string, objectType string) {
 	}
 	defer file.Close()
 
-	hash := hash_object(file, objectType)
+	hash := hash_object(file, objectType, false)
 	fmt.Println(hash)
 }
 
@@ -101,7 +102,7 @@ func git_add(files []string) {
 			os.Exit(1)
 		}
 		defer file.Close()
-		hash_object(file, "blob")
+		hash_object(file, "blob", true)
 
 	}
 }
@@ -110,7 +111,7 @@ func git_add(files []string) {
  * hash_object is a function that takes a file and an object type and
  * returns the sha1 hash of the object in form "<type> <size>\x00\<content>""
  */
-func hash_object(reader io.Reader, objectType string) string {
+func hash_object(reader io.Reader, objectType string, writeToObject bool) string {
 
 	tmpFile, err := os.CreateTemp("", "buffered-content-")
 	if err != nil {
@@ -128,9 +129,29 @@ func hash_object(reader io.Reader, objectType string) string {
 	hasher := sha1.New()
 	hasher.Write([]byte(header))
 
-	if _, err := io.Copy(hasher, tmpFile); err != nil {
-		log.Fatalf("Failed to read file content: %v", err)
+	io.Copy(hasher, tmpFile)
+
+	sha1Hash := hex.EncodeToString(hasher.Sum(nil))
+
+	if !writeToObject {
+		return sha1Hash
 	}
+
+	if err := os.MkdirAll(path.Join(".git", "objects", sha1Hash[:2]), 0755); err != nil {
+		log.Fatalf("Failed to create object directory: %v", err)
+	}
+	objectFile, err := os.Create(path.Join(".git", "objects", sha1Hash[:2], sha1Hash[2:]))
+	if err != nil {
+		log.Fatalf("Failed to create object file: %v", err)
+	}
+	defer objectFile.Close()
+
+	zlibWriter, _ := zlib.NewWriterLevel(objectFile, zlib.BestSpeed)
+	defer zlibWriter.Close()
+
+	zlibWriter.Write([]byte(header))
+	tmpFile.Seek(0, 0)
+	io.Copy(zlibWriter, tmpFile)
 
 	return hex.EncodeToString(hasher.Sum(nil))
 }
