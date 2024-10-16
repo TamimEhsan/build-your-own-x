@@ -3,6 +3,7 @@ package main
 import (
 	"compress/zlib"
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -10,7 +11,24 @@ import (
 	"log"
 	"os"
 	"path"
+	"syscall"
 )
+
+type indexEntry struct {
+	ctimeSec  int
+	ctimeNsec int
+	mtimeSec  int
+	mtimeNsec int
+	dev       int
+	ino       int
+	mode      int
+	uid       int
+	gid       int
+	size      int
+	sha1      []byte
+	flags     int
+	path      string
+}
 
 func main() {
 	initCmd := flag.NewFlagSet("init", flag.ExitOnError)
@@ -108,19 +126,44 @@ func git_hash_object(filename string, objectType string) {
 }
 
 func git_add(files []string) {
+	indexEntries := make([]indexEntry, 0)
 	for _, filename := range files {
+		indexEntry := indexEntry{}
 		// create a file
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("Failed to open file %s: %v", filename, err)
 		}
 		defer file.Close()
+
 		sz := getFileSize(file)
 		fileHash := hash_object(file, "blob", sz)
 		file.Seek(0, 0)
 		writeToObject(file, fileHash, "blob", sz)
 
+		fileInfo, err := os.Stat(filename)
+		if err != nil {
+			log.Fatalf("Failed to get file info: %v", err)
+		}
+		stat := fileInfo.Sys().(*syscall.Stat_t)
+		indexEntry.ctimeSec = int(stat.Ctim.Sec)
+		indexEntry.ctimeNsec = int(stat.Ctim.Nsec)
+		indexEntry.mtimeSec = int(stat.Mtim.Sec)
+		indexEntry.mtimeNsec = int(stat.Mtim.Nsec)
+		indexEntry.dev = int(stat.Dev)
+		indexEntry.ino = int(stat.Ino)
+		indexEntry.mode = int(stat.Mode)
+		indexEntry.uid = int(stat.Uid)
+		indexEntry.gid = int(stat.Gid)
+		indexEntry.size = int(stat.Size)
+		indexEntry.path = filename
+		indexEntry.sha1 = []byte(fileHash)
+		indexEntry.flags = len(filename)
+
+		indexEntries = append(indexEntries, indexEntry)
+
 	}
+	writeToIndex(indexEntries)
 }
 
 /**
@@ -143,7 +186,7 @@ func hash_object(reader io.Reader, objectType string, sz int) string {
  * writeToObject is a function that takes a reader, a file hash, an object type and a size
  * and writes the object to the .git/objects directory
  * The object is written in the form "<type> <size>\x00\<content>"
-*/
+ */
 
 func writeToObject(reader io.Reader, fileHash string, objectType string, sz int) {
 
@@ -154,7 +197,7 @@ func writeToObject(reader io.Reader, fileHash string, objectType string, sz int)
 	}
 	defer objectFile.Close()
 
-	zlibWriter, _ := zlib.NewWriterLevel(objectFile, zlib.BestCompression)
+	zlibWriter, _ := zlib.NewWriterLevel(objectFile, zlib.DefaultCompression)
 	defer zlibWriter.Close()
 
 	header := fmt.Sprintf("%s %d\x00", objectType, sz)
@@ -169,4 +212,50 @@ func getFileSize(file *os.File) int {
 		log.Fatalf("Failed to get file stat: %v", err)
 	}
 	return int(fileStat.Size())
+}
+
+func writeToIndex(indexEntries []indexEntry) {
+	file, err := os.OpenFile(path.Join("git", "index"), os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open index file: %v", err)
+	}
+	defer file.Close()
+	header := []byte("DIRC")
+	header = append(header, paddInteger(2, 4)...)
+	headerBytes := append([]byte(header), paddInteger(len(indexEntries), 4)...)
+	file.Write(headerBytes)
+	for _, entry := range indexEntries {
+		fmt.Println(entry.path)
+		file.Write(paddInteger(entry.ctimeSec, 4))
+		file.Write(paddInteger(entry.ctimeNsec, 4))
+		file.Write(paddInteger(entry.mtimeSec, 4))
+		file.Write(paddInteger(entry.mtimeNsec, 4))
+		file.Write(paddInteger(entry.dev, 4))
+		file.Write(paddInteger(entry.ino, 4))
+		file.Write(paddInteger(entry.mode, 4)) // probably some issue
+		file.Write(paddInteger(entry.uid, 4))
+		file.Write(paddInteger(entry.gid, 4))
+		file.Write(paddInteger(entry.size, 4))
+		file.Write(entry.sha1) // probably some issue
+		file.Write(paddInteger(entry.flags, 2))
+		file.Write([]byte(entry.path))
+		file.Write([]byte{0})
+
+		pad := (8 - ((len(entry.path) + 1) % 8)) % 8
+		file.Write(make([]byte, pad))
+
+	}
+
+}
+
+func paddInteger(n int, size int) []byte {
+	if size == 2 {
+		b := make([]byte, size)
+		binary.BigEndian.PutUint16(b, uint16(n))
+		return b
+	}
+
+	b := make([]byte, size)
+	binary.BigEndian.PutUint32(b, uint32(n))
+	return b
 }
