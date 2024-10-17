@@ -11,6 +11,9 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -58,8 +61,13 @@ func main() {
 		addCmd.Parse(os.Args[2:])
 		files := addCmd.Args()
 		git_add(files)
-	case "read-index":
-		readIndex()
+	case "ls-files":
+		indexes := readIndex()
+		for _, entry := range indexes {
+			fmt.Println(entry.path, " ", entry.size, " ", hex.EncodeToString(entry.sha1))
+		}
+	case "status":
+		git_status()
 	}
 
 }
@@ -127,20 +135,109 @@ func git_hash_object(filename string, objectType string) {
 	fmt.Println(hash)
 }
 
+func git_status() {
+	var dirIndexes []indexEntry
+
+	// Walk the directory tree
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !strings.HasPrefix(path, ".git") {
+			dirIndexes = append(dirIndexes, indexEntry{path: path})
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Print all files
+	for ind, index := range dirIndexes {
+		file, err := os.Open(index.path)
+		if err != nil {
+			log.Fatalf("Failed to open file %s: %v", index.path, err)
+		}
+		defer file.Close()
+		hash := hash_object(file, "blob", getFileSize(file))
+		dirIndexes[ind].sha1, _ = hex.DecodeString(hash)
+	}
+
+	// Read the index file
+	indexes := readIndex()
+	sort.Slice(dirIndexes, func(i, j int) bool { return dirIndexes[i].path < dirIndexes[j].path })
+	sort.Slice(indexes, func(i, j int) bool { return indexes[i].path < indexes[j].path })
+
+	// Compare the files
+	modified, untracked, deleted := []string{}, []string{}, []string{}
+	i, j := 0, 0
+	for i < len(dirIndexes) && j < len(indexes) {
+		if dirIndexes[i].path == indexes[j].path {
+			if hex.EncodeToString(dirIndexes[i].sha1) != hex.EncodeToString(indexes[j].sha1) {
+				modified = append(modified, dirIndexes[i].path)
+			}
+			i++
+			j++
+		} else if dirIndexes[i].path < indexes[j].path {
+			untracked = append(untracked, dirIndexes[i].path)
+			i++
+		} else {
+			deleted = append(deleted, indexes[j].path)
+			j++
+		}
+	}
+
+	for i < len(dirIndexes) {
+		untracked = append(untracked, dirIndexes[i].path)
+		i++
+	}
+
+	for j < len(indexes) {
+		deleted = append(deleted, indexes[j].path)
+		j++
+	}
+
+	const colorRed = "\033[0;31m"
+	const colorNone = "\033[0m"
+
+	fmt.Println("Changes not staged for commit:")
+	fmt.Println("  (use \"git add/rm <file>...\" to update what will be committed)")
+	fmt.Println("  (use \"git restore <file>...\" to discard changes in working directory)")
+
+	fmt.Print(colorRed)
+	for _, file := range modified {
+		fmt.Println("\tmodified:   ", file)
+	}
+	for _, file := range deleted {
+		fmt.Println("\tdeleted:    ", file)
+	}
+	fmt.Print(colorNone)
+	fmt.Println("Untracked files:")
+	fmt.Println("  (use \"git add <file>...\" to include in what will be committed)")
+	fmt.Print(colorRed)
+	for _, file := range untracked {
+		fmt.Println("\t", file)
+	}
+	fmt.Print(colorNone)
+
+}
+
 func setCorrectMode(mode int) int {
 	const mask = 0x1FF // Mask to extract the last 9 bits
 	const validMode1 = 0x1ED
 	const validMode2 = 0x1A4
-
-	last9Bits := mode & mask
-	if last9Bits == validMode1 || last9Bits == validMode2 {
-		return mode
-	}
 	mode = mode &^ mask
-	if (last9Bits & 0x1C0) == 0x1C0 {
-		return mode | validMode1
-	}
 	return mode | validMode2
+	// last9Bits := mode & mask
+	// fmt.Printf("last9Bits: %x\n", last9Bits)
+	// if last9Bits == validMode1 || last9Bits == validMode2 {
+	// 	return mode
+	// }
+	// mode = mode &^ mask
+	// if (last9Bits & 0x1C0) == 0x1C0 {
+	// 	return mode | validMode1
+	// }
+	// return mode | validMode2
 }
 
 func git_add(files []string) {
@@ -148,6 +245,7 @@ func git_add(files []string) {
 	for _, filename := range files {
 		indexEntry := indexEntry{}
 		// create a file
+		filename = path.Join(filename)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("Failed to open file %s: %v", filename, err)
@@ -240,6 +338,7 @@ func writeToIndex(indexEntries []indexEntry) {
 		log.Fatalf("Failed to open index file: %v", err)
 	}
 	defer file.Close()
+	file.Truncate(0)
 	header := []byte("DIRC")
 	header = append(header, paddInteger(2, 4)...)
 	headerBytes := append([]byte(header), paddInteger(len(indexEntries), 4)...)
@@ -291,24 +390,44 @@ func writeToIndex(indexEntries []indexEntry) {
 
 }
 
-func readIndex() {
+func validateFile(file *os.File) {
+	// check if the file is a regular file
+	fileStat, _ := file.Stat()
+	sz := fileStat.Size()
+	hasher := sha1.New()
+	b := make([]byte, 1)
+	for i := 0; i < int(sz)-20; i++ {
+		file.Read(b)
+		hasher.Write(b)
+	}
+	hash := hasher.Sum(nil)
+	checksum := make([]byte, 20)
+	file.Read(checksum)
+	if hex.EncodeToString(hash) != hex.EncodeToString(checksum) {
+		log.Fatalf("The file is corrupted")
+	}
+
+}
+
+func readIndex() []indexEntry {
 	file, err := os.Open(path.Join(".git", "index"))
 	if err != nil {
 		log.Fatalf("Failed to open index file: %v", err)
 	}
 	defer file.Close()
+	validateFile(file)
+	file.Seek(0, 0)
 
 	bytes := make([]byte, 4)
 	file.Read(bytes)
-	fmt.Println(string(bytes))
 
 	file.Read(bytes)
 	_ = binary.BigEndian.Uint32(bytes)
 
 	file.Read(bytes)
 	entryCount := binary.BigEndian.Uint32(bytes)
-	fmt.Println(entryCount)
 
+	indexes := make([]indexEntry, 0)
 	for i := 0; i < int(entryCount); i++ {
 		entry := indexEntry{}
 		bytes = make([]byte, 4)
@@ -354,11 +473,14 @@ func readIndex() {
 		entry.path = string(path)
 		pad := (8 - ((62 + len(entry.path)) % 8)) % 8
 		file.Seek(int64(pad), 1)
-		fmt.Printf("%x\n", entry.ctimeSec)
-		fmt.Printf("%x\n", entry.size)
-		fmt.Printf("%x\n", entry.sha1)
-		fmt.Println(entry.path)
+		// fmt.Printf("%x\n", entry.ctimeSec)
+		// fmt.Printf("%x\n", entry.size)
+		// fmt.Printf("%x\n", entry.sha1)
+		// fmt.Println(entry.path)
+
+		indexes = append(indexes, entry)
 	}
+	return indexes
 
 }
 
