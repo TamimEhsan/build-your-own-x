@@ -88,14 +88,14 @@ func git_init(directory string) {
 	}
 
 	// create a .git directory
-	createDir(path.Join(directory, "git"))
+	createDir(path.Join(directory, ".git"))
 	// create subdirectories
 	for _, dir := range []string{"branches", "hooks", "info", "logs", "objects", "refs"} {
-		createDir(path.Join(directory, "git", dir))
+		createDir(path.Join(directory, ".git", dir))
 	}
 	// create files
 	for _, file := range []string{"HEAD", "config", "description", "index", "packed-refs"} {
-		createFile(path.Join(directory, "git", file))
+		createFile(path.Join(directory, ".git", file))
 	}
 
 }
@@ -123,6 +123,22 @@ func git_hash_object(filename string, objectType string) {
 	sz := getFileSize(file)
 	hash := hash_object(file, objectType, sz)
 	fmt.Println(hash)
+}
+
+func setCorrectMode(mode int) int {
+	const mask = 0x1FF // Mask to extract the last 9 bits
+	const validMode1 = 0x1ED
+	const validMode2 = 0x1A4
+
+	last9Bits := mode & mask
+	if last9Bits == validMode1 || last9Bits == validMode2 {
+		return mode
+	}
+	mode = mode &^ mask
+	if (last9Bits & 0x1C0) == 0x1C0 {
+		return mode | validMode1
+	}
+	return mode | validMode2
 }
 
 func git_add(files []string) {
@@ -153,11 +169,13 @@ func git_add(files []string) {
 		indexEntry.dev = int(stat.Dev)
 		indexEntry.ino = int(stat.Ino)
 		indexEntry.mode = int(stat.Mode)
+		indexEntry.mode = setCorrectMode(indexEntry.mode)
 		indexEntry.uid = int(stat.Uid)
 		indexEntry.gid = int(stat.Gid)
 		indexEntry.size = int(stat.Size)
 		indexEntry.path = filename
-		indexEntry.sha1 = []byte(fileHash)
+		sha1, _ := hex.DecodeString(fileHash)
+		indexEntry.sha1 = sha1
 		indexEntry.flags = len(filename)
 
 		indexEntries = append(indexEntries, indexEntry)
@@ -187,11 +205,10 @@ func hash_object(reader io.Reader, objectType string, sz int) string {
  * and writes the object to the .git/objects directory
  * The object is written in the form "<type> <size>\x00\<content>"
  */
-
 func writeToObject(reader io.Reader, fileHash string, objectType string, sz int) {
 
-	createDir(path.Join("git", "objects", fileHash[:2]))
-	objectFile, err := os.Create(path.Join("git", "objects", fileHash[:2], fileHash[2:]))
+	createDir(path.Join(".git", "objects", fileHash[:2]))
+	objectFile, err := os.Create(path.Join(".git", "objects", fileHash[:2], fileHash[2:]))
 	if err != nil {
 		log.Fatalf("Failed to create object file: %v", err)
 	}
@@ -215,7 +232,7 @@ func getFileSize(file *os.File) int {
 }
 
 func writeToIndex(indexEntries []indexEntry) {
-	file, err := os.OpenFile(path.Join("git", "index"), os.O_RDWR|os.O_CREATE, 0644)
+	file, err := os.OpenFile(path.Join(".git", "index"), os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		log.Fatalf("Failed to open index file: %v", err)
 	}
@@ -225,26 +242,30 @@ func writeToIndex(indexEntries []indexEntry) {
 	headerBytes := append([]byte(header), paddInteger(len(indexEntries), 4)...)
 	file.Write(headerBytes)
 	for _, entry := range indexEntries {
-		fmt.Println(entry.path)
 		file.Write(paddInteger(entry.ctimeSec, 4))
 		file.Write(paddInteger(entry.ctimeNsec, 4))
 		file.Write(paddInteger(entry.mtimeSec, 4))
 		file.Write(paddInteger(entry.mtimeNsec, 4))
 		file.Write(paddInteger(entry.dev, 4))
 		file.Write(paddInteger(entry.ino, 4))
-		file.Write(paddInteger(entry.mode, 4)) // probably some issue
+		file.Write(paddInteger(entry.mode, 4))
 		file.Write(paddInteger(entry.uid, 4))
 		file.Write(paddInteger(entry.gid, 4))
 		file.Write(paddInteger(entry.size, 4))
-		file.Write(entry.sha1) // probably some issue
+		file.Write(entry.sha1)
 		file.Write(paddInteger(entry.flags, 2))
 		file.Write([]byte(entry.path))
 		file.Write([]byte{0})
 
-		pad := (8 - ((len(entry.path) + 1) % 8)) % 8
+		pad := (8 - ((62 + len(entry.path) + 1) % 8)) % 8
 		file.Write(make([]byte, pad))
 
 	}
+	file.Seek(0, 0)
+
+	hasher := sha1.New()
+	io.Copy(hasher, file)
+	file.Write(hasher.Sum(nil))
 
 }
 
