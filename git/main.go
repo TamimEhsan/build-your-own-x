@@ -58,6 +58,8 @@ func main() {
 		addCmd.Parse(os.Args[2:])
 		files := addCmd.Args()
 		git_add(files)
+	case "read-index":
+		readIndex()
 	}
 
 }
@@ -205,6 +207,7 @@ func hash_object(reader io.Reader, objectType string, sz int) string {
  * and writes the object to the .git/objects directory
  * The object is written in the form "<type> <size>\x00\<content>"
  */
+
 func writeToObject(reader io.Reader, fileHash string, objectType string, sz int) {
 
 	createDir(path.Join(".git", "objects", fileHash[:2]))
@@ -242,22 +245,41 @@ func writeToIndex(indexEntries []indexEntry) {
 	headerBytes := append([]byte(header), paddInteger(len(indexEntries), 4)...)
 	file.Write(headerBytes)
 	for _, entry := range indexEntries {
+		// fmt.Printf("%x\n", entry.ctimeSec)
+		// fmt.Printf("%x\n", entry.ctimeNsec)
+		// fmt.Printf("%x\n", entry.mtimeSec)
+		// fmt.Printf("%x\n", entry.mtimeNsec)
+		// fmt.Printf("dev: %x\n", entry.dev)
+		// fmt.Printf("ino: %x\n", entry.ino)
+		// fmt.Printf("mode: %x\n", entry.mode)
+		// fmt.Printf("uid: %x\n", entry.uid)
+		// fmt.Printf("gid: %x\n", entry.gid)
+		// fmt.Printf("size: %x\n", entry.size)
+		// fmt.Printf("%x, %d\n", entry.sha1, len(entry.sha1))
+		// fmt.Printf("%x\n", entry.flags)
+
+		// fmt.Println(entry.path)
 		file.Write(paddInteger(entry.ctimeSec, 4))
 		file.Write(paddInteger(entry.ctimeNsec, 4))
 		file.Write(paddInteger(entry.mtimeSec, 4))
 		file.Write(paddInteger(entry.mtimeNsec, 4))
 		file.Write(paddInteger(entry.dev, 4))
 		file.Write(paddInteger(entry.ino, 4))
+		// the mode is a 4 byte integer
+		// where the last 9 bit can be only of two type 111101101 or 110100100
+
 		file.Write(paddInteger(entry.mode, 4))
 		file.Write(paddInteger(entry.uid, 4))
 		file.Write(paddInteger(entry.gid, 4))
 		file.Write(paddInteger(entry.size, 4))
 		file.Write(entry.sha1)
+		// fmt.Println("size of sha1", n)
 		file.Write(paddInteger(entry.flags, 2))
 		file.Write([]byte(entry.path))
 		file.Write([]byte{0})
 
 		pad := (8 - ((62 + len(entry.path) + 1) % 8)) % 8
+		// fmt.Println("pad", pad)
 		file.Write(make([]byte, pad))
 
 	}
@@ -266,6 +288,77 @@ func writeToIndex(indexEntries []indexEntry) {
 	hasher := sha1.New()
 	io.Copy(hasher, file)
 	file.Write(hasher.Sum(nil))
+
+}
+
+func readIndex() {
+	file, err := os.Open(path.Join(".git", "index"))
+	if err != nil {
+		log.Fatalf("Failed to open index file: %v", err)
+	}
+	defer file.Close()
+
+	bytes := make([]byte, 4)
+	file.Read(bytes)
+	fmt.Println(string(bytes))
+
+	file.Read(bytes)
+	_ = binary.BigEndian.Uint32(bytes)
+
+	file.Read(bytes)
+	entryCount := binary.BigEndian.Uint32(bytes)
+	fmt.Println(entryCount)
+
+	for i := 0; i < int(entryCount); i++ {
+		entry := indexEntry{}
+		bytes = make([]byte, 4)
+		file.Read(bytes)
+		entry.ctimeSec = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.ctimeNsec = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.mtimeSec = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.mtimeNsec = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.dev = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.ino = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.mode = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.uid = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.gid = int(binary.BigEndian.Uint32(bytes))
+
+		file.Read(bytes)
+		entry.size = int(binary.BigEndian.Uint32(bytes))
+
+		entry.sha1 = make([]byte, 20)
+		file.Read(entry.sha1)
+
+		bytes = make([]byte, 2)
+		file.Read(bytes)
+		entry.flags = int(binary.BigEndian.Uint16(bytes))
+
+		path := make([]byte, entry.flags)
+		file.Read(path)
+		entry.path = string(path)
+		pad := (8 - ((62 + len(entry.path)) % 8)) % 8
+		file.Seek(int64(pad), 1)
+		fmt.Printf("%x\n", entry.ctimeSec)
+		fmt.Printf("%x\n", entry.size)
+		fmt.Printf("%x\n", entry.sha1)
+		fmt.Println(entry.path)
+	}
 
 }
 
